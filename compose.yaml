@@ -1,0 +1,10 @@
+services:
+  app:
+    build: .
+    image: ghcr.io/birabittoh/forwarder:main
+    container_name: forwarder
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./comment.md:/app/comment.md:ro
