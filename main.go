@@ -21,9 +21,7 @@ type Config struct {
 
 func loadConfig() (*Config, error) {
 	// Carica il file .env
-	if err := godotenv.Load(); err != nil {
-		log.Println("Warning: .env file not found, using environment variables")
-	}
+	godotenv.Load()
 
 	// Leggi le variabili di ambiente
 	botToken := os.Getenv("BOT_TOKEN")

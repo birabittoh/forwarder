@@ -2,8 +2,6 @@
 
 FROM golang:1.24-alpine AS builder
 
-RUN apk add --no-cache build-base
-
 WORKDIR /build
 
 # Download Git submodules
@@ -19,7 +17,7 @@ RUN go mod verify
 COPY *.go ./
 
 # Build
-RUN go build -o /dist/forwarder
+RUN CGO_ENABLED=0 go build -o /dist/forwarder
 
 
 # Test
