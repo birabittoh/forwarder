@@ -29,6 +29,7 @@ var (
 	ignorePattern *regexp.Regexp
 	tdlibClient   *client.Client
 	authorizer    *ClientAuthorizer
+	myUserID      int64 // ID del nostro account
 )
 
 type ClientAuthorizer struct {
@@ -160,6 +161,14 @@ func initTDLib() error {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
 
+	// Ottieni l'ID del nostro account una sola volta all'avvio
+	me, err := tdlibClient.GetMe()
+	if err != nil {
+		return fmt.Errorf("failed to get user info: %w", err)
+	}
+	myUserID = me.Id
+	log.Printf("Logged in as user ID: %d", myUserID)
+
 	return nil
 }
 
@@ -203,9 +212,6 @@ func forwardMessage(messageID int64) (m *client.Messages, err error) {
 }
 
 func postComment(message *client.Message) error {
-	// Get the forwarded message in target channel to find its message thread
-	// Note: This is simplified - you may need to track the forwarded message ID
-
 	commentText := &client.FormattedText{
 		Text:     cfg.CommentTemplate,
 		Entities: []*client.TextEntity{},
@@ -241,6 +247,18 @@ func postComment(message *client.Message) error {
 	return nil
 }
 
+func isMessageFromMe(message *client.Message) bool {
+	switch sender := message.SenderId.(type) {
+	case *client.MessageSenderUser:
+		return sender.UserId == myUserID
+	case *client.MessageSenderChat:
+		// Il messaggio è stato inviato da una chat/canale, non da noi
+		return false
+	default:
+		return false
+	}
+}
+
 func handleUpdate(update client.Update) {
 	switch u := update.(type) {
 	case *client.UpdateNewMessage:
@@ -262,22 +280,20 @@ func handleUpdate(update client.Update) {
 				log.Printf("Error forwarding message: %v", err)
 				return
 			}
+
 		case cfg.DiscussionGroupID:
-			// Post comment in discussion group
-			// Return if the message is not from the bot itself
-			me, err := tdlibClient.GetMe()
-			if err != nil {
-				log.Printf("Error getting bot info: %v", err)
-				return
-			}
-			if int64(u.ClientId) != me.Id { // Claude: u.ClientId è 1, mentre me.Id è il mio ID di telegram.
+			// Verifica se il messaggio è dal nostro account
+			if !isMessageFromMe(u.Message) {
+				log.Printf("Message %d not from our account, ignoring", u.Message.Id)
 				return
 			}
 
+			log.Printf("Message %d is from our account, posting comment", u.Message.Id)
+
+			// Post comment in discussion group
 			if err := postComment(u.Message); err != nil {
 				log.Printf("Error posting comment: %v", err)
 			}
-
 		}
 	}
 }
