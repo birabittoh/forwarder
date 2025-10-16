@@ -10,8 +10,12 @@ NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 CGO_LDFLAGS := -L/usr/local/lib -ltdjson_static -ltdjson_private -ltdclient -ltdcore -ltdmtproto -ltdactor -ltdapi -ltddb -ltdsqlite -ltdnet -ltdutils -ltde2e -lstdc++ -lssl -lcrypto -ldl -lz -lm -lpthread
 CGO_CFLAGS := -I/usr/local/include
 
+# Update submodules
+update-submodules:
+	@git submodule update --init --recursive
+
 # Build tdlib from source
-build-tdlib:
+build-tdlib: update-submodules
 	@echo "Building tdlib..."
 	@mkdir -p $(TDLIB_BUILD_DIR)
 	@cd $(TDLIB_BUILD_DIR) && \
@@ -27,7 +31,7 @@ install-tdlib: build-tdlib
 	@echo "tdlib installed successfully!"
 
 # Build forwarder
-build:
+build: install-tdlib
 	@echo "Building forwarder..."
 	@CGO_ENABLED=1 \
 		CGO_LDFLAGS="$(CGO_LDFLAGS)" \
