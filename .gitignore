@@ -1,3 +1,5 @@
 .env
 comment.md
 __debug_bin*
+tdlib-db
+tdlib-files

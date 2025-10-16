@@ -8,3 +8,5 @@ services:
       - .env
     volumes:
       - ./comment.md:/app/comment.md:ro
+      - ./tdlib-db:/app/tdlib-db
+      - ./tdlib-files:/app/tdlib-files
