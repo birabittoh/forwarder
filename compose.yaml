@@ -10,3 +10,7 @@ services:
       - ./comment.md:/app/comment.md:ro
       - ./tdlib-db:/app/tdlib-db
       - ./tdlib-files:/app/tdlib-files
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "1m"

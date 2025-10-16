@@ -6,6 +6,7 @@ import (
 	"os"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/zelenin/go-tdlib/client"
@@ -22,6 +23,7 @@ type Config struct {
 	CommentTemplate   string
 	DatabaseDirectory string
 	FilesDirectory    string
+	VerbosityLevel    int
 }
 
 var (
@@ -29,7 +31,6 @@ var (
 	ignorePattern *regexp.Regexp
 	tdlibClient   *client.Client
 	authorizer    *ClientAuthorizer
-	myUserID      int64 // ID del nostro account
 )
 
 type ClientAuthorizer struct {
@@ -127,6 +128,11 @@ func loadConfig() error {
 	cfg.DatabaseDirectory = getEnv("DATABASE_DIRECTORY", "./tdlib-db")
 	cfg.FilesDirectory = getEnv("FILES_DIRECTORY", "./tdlib-files")
 
+	cfg.VerbosityLevel, err = strconv.Atoi(getEnv("VERBOSITY_LEVEL", "2"))
+	if err != nil {
+		return fmt.Errorf("invalid VERBOSITY_LEVEL: %w", err)
+	}
+
 	// Compile regex
 	ignorePattern, err = regexp.Compile(cfg.IgnoreRegex)
 	if err != nil {
@@ -138,7 +144,7 @@ func loadConfig() error {
 	if err != nil {
 		return fmt.Errorf("failed to read COMMENT_TEMPLATE_FILE: %w", err)
 	}
-	cfg.CommentTemplate = string(commentBytes)
+	cfg.CommentTemplate = strings.TrimSpace(string(commentBytes))
 
 	return nil
 }
@@ -151,6 +157,8 @@ func getEnv(key, defaultValue string) string {
 }
 
 func initTDLib() error {
+	client.SetLogVerbosityLevel(&client.SetLogVerbosityLevelRequest{NewVerbosityLevel: int32(cfg.VerbosityLevel)})
+
 	authorizer = &ClientAuthorizer{
 		PhoneNumber: cfg.PhoneNumber,
 	}
@@ -160,14 +168,6 @@ func initTDLib() error {
 	if err != nil {
 		return fmt.Errorf("failed to create client: %w", err)
 	}
-
-	// Ottieni l'ID del nostro account una sola volta all'avvio
-	me, err := tdlibClient.GetMe()
-	if err != nil {
-		return fmt.Errorf("failed to get user info: %w", err)
-	}
-	myUserID = me.Id
-	log.Printf("Logged in as user ID: %d", myUserID)
 
 	return nil
 }
@@ -248,15 +248,19 @@ func postComment(message *client.Message) error {
 }
 
 func isMessageFromMe(message *client.Message) bool {
-	switch sender := message.SenderId.(type) {
-	case *client.MessageSenderUser:
-		return sender.UserId == myUserID
-	case *client.MessageSenderChat:
-		// Il messaggio è stato inviato da una chat/canale, non da noi
-		return false
-	default:
+	// Check if the message's content is equal to the comment template
+	messageText := getMessageText(message.Content)
+	if messageText == cfg.CommentTemplate {
 		return false
 	}
+
+	switch sender := message.SenderId.(type) {
+	case *client.MessageSenderUser:
+		return false
+	case *client.MessageSenderChat:
+		return sender.ChatId == cfg.TargetChannelID
+	}
+	return false
 }
 
 func handleUpdate(update client.Update) {
@@ -284,7 +288,6 @@ func handleUpdate(update client.Update) {
 		case cfg.DiscussionGroupID:
 			// Verifica se il messaggio è dal nostro account
 			if !isMessageFromMe(u.Message) {
-				log.Printf("Message %d not from our account, ignoring", u.Message.Id)
 				return
 			}
 
