@@ -6,31 +6,31 @@ import (
 	"os"
 	"regexp"
 	"strconv"
-	"strings"
 
 	"github.com/joho/godotenv"
 	"github.com/zelenin/go-tdlib/client"
 )
 
 type Config struct {
-	ApiID             int32
-	ApiHash           string
-	PhoneNumber       string
-	SourceChannelID   int64
-	TargetChannelID   int64
-	DiscussionGroupID int64
-	IgnoreRegex       string
-	CommentTemplate   string
-	DatabaseDirectory string
-	FilesDirectory    string
-	VerbosityLevel    int
+	ApiID                int32
+	ApiHash              string
+	PhoneNumber          string
+	SourceChannelID      int64
+	TargetChannelID      int64
+	DiscussionGroupID    int64
+	CommentTemplate      *client.FormattedText
+	CommentNotifications bool
+	ShowForwarded        bool
+	IgnoreRegex          *regexp.Regexp
+	DatabaseDirectory    string
+	FilesDirectory       string
+	VerbosityLevel       int
 }
 
 var (
-	cfg           Config
-	ignorePattern *regexp.Regexp
-	tdlibClient   *client.Client
-	authorizer    *ClientAuthorizer
+	cfg         Config
+	tdlibClient *client.Client
+	authorizer  *ClientAuthorizer
 )
 
 type ClientAuthorizer struct {
@@ -118,13 +118,41 @@ func loadConfig() error {
 	}
 	cfg.TargetChannelID = targetID
 
-	discussionID, err := strconv.ParseInt(getEnv("DISCUSSION_GROUP_ID", ""), 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid DISCUSSION_GROUP_ID: %w", err)
-	}
-	cfg.DiscussionGroupID = discussionID
+	cfg.DiscussionGroupID, _ = strconv.ParseInt(getEnv("DISCUSSION_GROUP_ID", ""), 10, 64)
 
-	cfg.IgnoreRegex = getEnv("IGNORE_REGEX", "#aff")
+	// Read comment template from file
+	commentBytes, err := os.ReadFile(getEnv("COMMENT_TEMPLATE_FILE", "comment.md"))
+	if err == nil {
+		cfg.CommentTemplate, err = client.ParseMarkdown(&client.ParseMarkdownRequest{
+			Text: &client.FormattedText{
+				Text: string(commentBytes),
+			},
+		})
+
+		if err != nil {
+			cfg.CommentTemplate = nil
+		}
+	}
+
+	cfg.CommentNotifications, err = strconv.ParseBool(getEnv("ENABLE_COMMENT_NOTIFICATIONS", "false"))
+	if err != nil {
+		cfg.CommentNotifications = false
+	}
+
+	cfg.ShowForwarded, err = strconv.ParseBool(getEnv("SHOW_FORWARDED", "false"))
+	if err != nil {
+		cfg.ShowForwarded = false
+	}
+
+	// Compile regex
+	ignoreRegexStr := getEnv("IGNORE_REGEX", "")
+	if ignoreRegexStr != "" {
+		cfg.IgnoreRegex, err = regexp.Compile(ignoreRegexStr)
+		if err != nil {
+			return fmt.Errorf("invalid IGNORE_REGEX: %w", err)
+		}
+	}
+
 	cfg.DatabaseDirectory = getEnv("DATABASE_DIRECTORY", "./tdlib-db")
 	cfg.FilesDirectory = getEnv("FILES_DIRECTORY", "./tdlib-files")
 
@@ -132,19 +160,6 @@ func loadConfig() error {
 	if err != nil {
 		return fmt.Errorf("invalid VERBOSITY_LEVEL: %w", err)
 	}
-
-	// Compile regex
-	ignorePattern, err = regexp.Compile(cfg.IgnoreRegex)
-	if err != nil {
-		return fmt.Errorf("invalid IGNORE_REGEX: %w", err)
-	}
-
-	// Read comment template from file
-	commentBytes, err := os.ReadFile(getEnv("COMMENT_TEMPLATE_FILE", "comment.md"))
-	if err != nil {
-		return fmt.Errorf("failed to read COMMENT_TEMPLATE_FILE: %w", err)
-	}
-	cfg.CommentTemplate = strings.TrimSpace(string(commentBytes))
 
 	return nil
 }
@@ -172,85 +187,108 @@ func initTDLib() error {
 	return nil
 }
 
-func getMessageText(content client.MessageContent) string {
+func getMessageText(content client.MessageContent) *client.FormattedText {
 	switch c := content.(type) {
 	case *client.MessageText:
-		return c.Text.Text
+		return c.Text
 	case *client.MessagePhoto:
-		return c.Caption.Text
+		return c.Caption
 	case *client.MessageVideo:
-		return c.Caption.Text
+		return c.Caption
 	case *client.MessageDocument:
-		return c.Caption.Text
+		return c.Caption
 	default:
-		return ""
+		return nil
 	}
 }
 
-func shouldIgnoreMessage(text string) bool {
-	if text == "" {
+func shouldForwardMessage(text *client.FormattedText) bool {
+	if text == nil {
 		return false
 	}
-	return ignorePattern.MatchString(text)
+
+	if cfg.IgnoreRegex == nil {
+		return true // no regex = no check
+	}
+
+	return !cfg.IgnoreRegex.MatchString(text.Text)
 }
 
-func forwardMessage(messageID int64) (m *client.Messages, err error) {
+func forwardMessage(messageID int64) error {
 	// Forward message to target channel
-	m, err = tdlibClient.ForwardMessages(&client.ForwardMessagesRequest{
+	_, err := tdlibClient.ForwardMessages(&client.ForwardMessagesRequest{
 		ChatId:        cfg.TargetChannelID,
 		FromChatId:    cfg.SourceChannelID,
 		MessageIds:    []int64{messageID},
-		SendCopy:      true,
+		SendCopy:      cfg.ShowForwarded,
 		RemoveCaption: false,
 	})
 
-	if err == nil {
-		log.Printf("Message %d forwarded successfully", messageID)
+	if err != nil {
+		return err
 	}
 
-	return
+	log.Printf("Message %d forwarded successfully", messageID)
+	return nil
 }
 
 func postComment(message *client.Message) error {
-	commentText := &client.FormattedText{
-		Text:     cfg.CommentTemplate,
-		Entities: []*client.TextEntity{},
-	}
-
-	// Parse markdown if needed
-	parsedText, err := tdlibClient.ParseMarkdown(&client.ParseMarkdownRequest{
-		Text: commentText,
-	})
-	if err != nil {
-		log.Printf("Warning: failed to parse markdown: %v", err)
-	} else {
-		commentText = parsedText
-	}
-
-	inputContent := &client.InputMessageText{
-		Text:       commentText,
-		ClearDraft: false,
-	}
-
-	_, err = tdlibClient.SendMessage(&client.SendMessageRequest{
+	_, err := tdlibClient.SendMessage(&client.SendMessageRequest{
 		ChatId:              cfg.DiscussionGroupID,
 		MessageThreadId:     message.MessageThreadId,
 		ReplyTo:             &client.InputMessageReplyToMessage{MessageId: message.Id},
-		InputMessageContent: inputContent,
+		InputMessageContent: &client.InputMessageText{Text: cfg.CommentTemplate},
+		Options:             &client.MessageSendOptions{DisableNotification: cfg.CommentNotifications},
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to post comment: %w", err)
+		return err
 	}
 
 	log.Printf("Comment posted for message %d", message.Id)
 	return nil
 }
 
-func isMessageFromMe(message *client.Message) bool {
-	// Check if the message's content is equal to the comment template
-	messageText := getMessageText(message.Content)
-	if messageText == cfg.CommentTemplate {
+func compareMessages(msg1, msg2 *client.FormattedText) bool {
+	if msg1 == nil || msg2 == nil {
+		return false
+	}
+
+	if msg1.Type != msg2.Type {
+		return false
+	}
+
+	if msg1.Text != msg2.Text {
+		return false
+	}
+
+	if msg1.Extra != msg2.Extra {
+		return false
+	}
+
+	if len(msg1.Entities) != len(msg2.Entities) {
+		return false
+	}
+
+	for i := range msg1.Entities {
+		ent1 := msg1.Entities[i]
+		ent2 := msg2.Entities[i]
+
+		if ent1.Offset != ent2.Offset || ent1.Length != ent2.Length || ent1.Type != ent2.Type {
+			return false
+		}
+	}
+
+	return true
+}
+
+func shouldPostComment(message *client.Message) bool { // false = send comment, true = ignore
+	if cfg.CommentTemplate == nil {
+		return false
+	}
+
+	// Don't send again if the message's content is equal to the comment template
+	if compareMessages(getMessageText(message.Content), cfg.CommentTemplate) {
 		return false
 	}
 
@@ -270,28 +308,25 @@ func handleUpdate(update client.Update) {
 		switch u.Message.ChatId {
 
 		case cfg.SourceChannelID:
-			// Check if message should be ignored
-			if shouldIgnoreMessage(getMessageText(u.Message.Content)) {
-				log.Printf("Message %d ignored (matched regex)", u.Message.Id)
+			if !shouldForwardMessage(getMessageText(u.Message.Content)) { // Check if message should be forwarded
+				log.Printf("Message %d was not forwarded", u.Message.Id)
 				return
 			}
 
 			log.Printf("New message from source channel: %d", u.Message.Id)
 
 			// Forward message
-			_, err := forwardMessage(u.Message.Id)
-			if err != nil {
+			if err := forwardMessage(u.Message.Id); err != nil {
 				log.Printf("Error forwarding message: %v", err)
 				return
 			}
 
-		case cfg.DiscussionGroupID:
-			// Verifica se il messaggio è dal nostro account
-			if !isMessageFromMe(u.Message) {
+		case cfg.DiscussionGroupID: // will be 0 if not set
+			if !shouldPostComment(u.Message) { // Check if comment should be posted
 				return
 			}
 
-			log.Printf("Message %d is from our account, posting comment", u.Message.Id)
+			log.Printf("Message %d is valid, posting comment", u.Message.Id)
 
 			// Post comment in discussion group
 			if err := postComment(u.Message); err != nil {
