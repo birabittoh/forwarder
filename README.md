@@ -18,7 +18,7 @@ make run
 ```
 To build the binary:
 ```
-make build
+make
 ```
 
 ### Run with Docker
@@ -28,7 +28,15 @@ make docker
 ```
 Run interactively (required for PIN/password input):
 ```
-docker run -it ghcr.io/birabittoh/forwarder:main
+docker run -it --rm \
+  --name forwarder \
+  --env-file .env \
+  -v "$(pwd)/comment.md:/app/comment.md:ro" \
+  -v "$(pwd)/tdlib-db:/app/tdlib-db" \
+  -v "$(pwd)/tdlib-files:/app/tdlib-files" \
+  --log-driver json-file \
+  --log-opt max-size=1m \
+  ghcr.io/birabittoh/forwarder:main
 ```
 Or use docker-compose:
 ```
@@ -44,3 +52,6 @@ When starting the bot, you will be prompted to enter your Telegram PIN and passw
 go test -v ./...
 make run
 ```
+
+## License
+Forwarder is provided under the MIT license.

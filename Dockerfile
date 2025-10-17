@@ -9,9 +9,7 @@ RUN apk add --no-cache \
     openssl-dev \
     zlib-dev \
     linux-headers \
-    git \
-    gperf \
-    php
+    gperf
 
 # Copy and build tdlib from source
 COPY tdlib/ /tdlib/
@@ -25,8 +23,7 @@ RUN cmake --install .
 # Set up Go build environment
 WORKDIR /build
 ENV CGO_ENABLED=1
-ENV CGO_CFLAGS="-I/usr/local/include"
-ENV CGO_LDFLAGS="-L/usr/local/lib -ltdjson"
+ENV CGO_LDFLAGS="-ltdjson"
 
 # Download Go modules
 COPY go.mod go.sum ./
@@ -35,6 +32,8 @@ RUN go mod verify
 
 # Transfer source code and build
 COPY *.go ./
+COPY config/ ./config/
+COPY forwarder/ ./forwarder/
 RUN go build -o /dist/forwarder
 
 # Test stage
@@ -43,9 +42,8 @@ RUN go test -v ./...
 
 # Final stage
 FROM alpine:3 AS build-release-stage
-RUN apk add --no-cache libstdc++ openssl zlib
+RUN apk add --no-cache libstdc++
 COPY --from=builder /usr/local/lib/libtd*.so* /usr/local/lib/
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 COPY --from=builder /dist/forwarder /app/forwarder
 WORKDIR /app
 ENTRYPOINT ["/app/forwarder"]

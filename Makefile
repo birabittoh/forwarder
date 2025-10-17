@@ -7,8 +7,7 @@ all: build
 TDLIB_DIR := tdlib
 TDLIB_BUILD_DIR := $(TDLIB_DIR)/build
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
-CGO_LDFLAGS := -L/usr/local/lib -ltdjson_static -ltdjson_private -ltdclient -ltdcore -ltdmtproto -ltdactor -ltdapi -ltddb -ltdsqlite -ltdnet -ltdutils -ltde2e -lstdc++ -lssl -lcrypto -ldl -lz -lm -lpthread
-CGO_CFLAGS := -I/usr/local/include
+CGO_LDFLAGS := -ltdjson
 
 # Update submodules
 update-submodules:
@@ -35,7 +34,6 @@ build: install-tdlib
 	@echo "Building forwarder..."
 	@CGO_ENABLED=1 \
 		CGO_LDFLAGS="$(CGO_LDFLAGS)" \
-		CGO_CFLAGS="$(CGO_CFLAGS)" \
 		go build -o forwarder .
 	@echo "forwarder built successfully!"
 

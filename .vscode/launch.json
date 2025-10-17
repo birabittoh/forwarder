@@ -12,7 +12,7 @@
             "mode": "auto",
             "program": ".",
             "env": {
-                "CGO_LDFLAGS": "-L/usr/local/lib -ltdjson_static -ltdjson_private -ltdclient -ltdcore -ltdmtproto -ltdactor -ltdapi -ltddb -ltdsqlite -ltdnet -ltdutils -ltde2e -lstdc++ -lssl -lcrypto -ldl -lz -lm -lpthread"
+                "CGO_LDFLAGS": "-ltdjson"
             }
         }
     ]
